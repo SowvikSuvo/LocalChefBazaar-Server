@@ -56,39 +56,106 @@ async function run() {
     const reviewsCollection = db.collection("review");
     const favoritesCollection = db.collection("favorite");
     const ordersCollection = db.collection("orders");
+    const paymentCollection = db.collection("payments");
 
     // payment endpoint
     app.post("/create-checkout-session", verifyJWT, async (req, res) => {
-      const paymentInfo = req.body;
-      console.log(paymentInfo);
-      const paymentAmount = parseInt(paymentInfo?.order?.price) * 100;
-      res.send(paymentInfo);
-      const session = await stripe.checkout.sessions.create({
-        line_items: [
-          {
-            price_data: {
-              currency: "usd",
-              product_data: {
-                name: `Please pay for: ${paymentInfo?.order?.mealName}`,
+      try {
+        const paymentInfo = req.body;
+        console.log("Received Payment Info:", paymentInfo);
+
+        const paymentAmount = parseInt(paymentInfo?.order?.price) * 100;
+
+        const session = await stripe.checkout.sessions.create({
+          line_items: [
+            {
+              price_data: {
+                currency: "usd",
+                product_data: {
+                  name: `Please pay for: ${paymentInfo?.order?.mealName}`,
+                },
+                unit_amount: paymentAmount,
               },
-              unit_amount: paymentAmount,
+              quantity: paymentInfo?.order?.quantity || 1,
             },
-            quantity: paymentInfo?.order?.quantity,
+          ],
+          customer_email: paymentInfo?.userEmail,
+          mode: "payment",
+          metadata: {
+            userEmail: paymentInfo?.userEmail,
+            userAddress: paymentInfo?.order?.userAddress,
+            chefId: paymentInfo?.order?.chefId,
+            foodId: paymentInfo?.order?.foodId,
+            orderId: paymentInfo?.order?._id?.toString(),
+            paymentStatus: "pending",
+            chefName: paymentInfo?.order?.chefName,
+            mealName: paymentInfo?.order?.mealName,
+            deliveryTime: paymentInfo?.order?.estimatedDeliveryTime,
+            orderStatus: "pending",
           },
-        ],
-        customer_email: paymentInfo?.userEmail,
-        mode: "payment",
-        meta_data: {
-          orderId: paymentInfo?.order?._id,
-          userEmail: paymentInfo?.userEmail,
-          userAddress: paymentInfo?.order?.userAddress,
-        },
-        success_url: `${process.env.CLIENT_URL}/payment-success`,
-      });
+          success_url: `${process.env.CLIENT_URL}/dashboard/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+          cancel_url: `${process.env.CLIENT_URL}/dashboard/my-orders`,
+        });
+
+        return res.send({ url: session.url });
+      } catch (err) {
+        console.error("Stripe Error:", err);
+        return res.status(500).json({ error: err.message });
+      }
+    });
+
+    app.post("/payment-success", async (req, res) => {
+      try {
+        const { sessionId } = req.body;
+
+        const session = await stripe.checkout.sessions.retrieve(sessionId);
+
+        if (session.payment_status !== "paid") {
+          return res
+            .status(400)
+            .send({ success: false, message: "Payment not completed!" });
+        }
+
+        const metadata = session.metadata;
+
+        const paymentRecord = {
+          foodId: metadata.foodId,
+          chefId: metadata.chefId,
+          userEmail: metadata.userEmail,
+          transactionId: session.payment_intent,
+          paymentStatus: "paid",
+          orderStatus: "accepted",
+          amountPaid: session.amount_total / 100,
+          quantity: Number(metadata.quantity),
+          mealName: metadata.mealName,
+          chefName: metadata.chefName,
+          userAddress: metadata.userAddress,
+          paymentDate: new Date(),
+        };
+
+        await paymentCollection.insertOne(paymentRecord);
+
+        await ordersCollection.updateOne(
+          { _id: new ObjectId(metadata.orderId) },
+          { $set: { paymentStatus: "paid", orderStatus: "accepted" } }
+        );
+
+        res.send({
+          success: true,
+          message: "Payment stored and order updated successfully!",
+        });
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to save payment!",
+          error: error.message,
+        });
+      }
     });
 
     // chef Api
-    // PUBLIC GET — Meals with Sorting
+
     app.get("/meals", async (req, res) => {
       try {
         const sortOrder = req.query.sort === "desc" ? -1 : 1;
@@ -179,6 +246,9 @@ async function run() {
       }
     });
 
+    // get all orders for a user by email
+    // app.get("/my-orders/:email", async (req, res) => {;
+
     // POST /reviews
     app.post("/reviews", async (req, res) => {
       try {
@@ -247,7 +317,6 @@ async function run() {
       try {
         const meal = req.body;
 
-        // VALIDATE REQUIRED FIELDS
         const requiredFields = [
           "foodName",
           "chefName",
@@ -257,7 +326,7 @@ async function run() {
           "estimatedDeliveryTime",
           "chefExperience",
           "userEmail",
-          "chefId", // original full UID from client
+          "chefId",
           "foodImage",
           "deliveryArea",
         ];
@@ -271,21 +340,16 @@ async function run() {
           }
         }
 
-        // SHORTEN chefId
-        meal.chefId = `chef_${meal.chefId.slice(0, 6)}`; // <-- short version
+        meal.chefId = `chef_${meal.chefId.slice(0, 6)}`; //
 
-        // FIX: ingredients must be array
         if (!Array.isArray(meal.ingredients)) {
           meal.ingredients = meal.ingredients.split(",").map((i) => i.trim());
         }
 
-        // FIX: rating should not exceed 5
         meal.rating = Math.min(Number(meal.rating), 5);
 
-        // AUTO ADD TIMESTAMP
         meal.createdAt = new Date();
 
-        // INSERT INTO DB
         const result = await mealsCollection.insertOne(meal);
 
         res.status(201).send({
