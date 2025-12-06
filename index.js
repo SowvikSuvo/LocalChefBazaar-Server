@@ -2,6 +2,7 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
+const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 const admin = require("firebase-admin");
 const port = process.env.PORT || 3000;
 const decoded = Buffer.from(process.env.FB_SERVICE_KEY, "base64").toString(
@@ -16,11 +17,7 @@ const app = express();
 // middleware
 app.use(
   cors({
-    origin: [
-      "http://localhost:5173",
-      "http://localhost:5174",
-      "https://b12-m11-session.web.app",
-    ],
+    origin: [process.env.CLIENT_URL],
     credentials: true,
     optionSuccessStatus: 200,
   })
@@ -59,6 +56,37 @@ async function run() {
     const reviewsCollection = db.collection("review");
     const favoritesCollection = db.collection("favorite");
     const ordersCollection = db.collection("orders");
+
+    // payment endpoint
+    app.post("/create-checkout-session", verifyJWT, async (req, res) => {
+      const paymentInfo = req.body;
+      console.log(paymentInfo);
+      const paymentAmount = parseInt(paymentInfo?.order?.price) * 100;
+      res.send(paymentInfo);
+      const session = await stripe.checkout.sessions.create({
+        line_items: [
+          {
+            price_data: {
+              currency: "usd",
+              product_data: {
+                name: `Please pay for: ${paymentInfo?.order?.mealName}`,
+              },
+              unit_amount: paymentAmount,
+            },
+            quantity: paymentInfo?.order?.quantity,
+          },
+        ],
+        customer_email: paymentInfo?.userEmail,
+        mode: "payment",
+        meta_data: {
+          orderId: paymentInfo?.order?._id,
+          userEmail: paymentInfo?.userEmail,
+          userAddress: paymentInfo?.order?.userAddress,
+        },
+        success_url: `${process.env.CLIENT_URL}/payment-success`,
+      });
+    });
+
     // chef Api
     // PUBLIC GET — Meals with Sorting
     app.get("/meals", async (req, res) => {
