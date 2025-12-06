@@ -55,6 +55,8 @@ async function run() {
   try {
     const db = client.db("LocalChefBazaar");
     const mealsCollection = db.collection("meals");
+    const reviewsCollection = db.collection("review");
+    const favoritesCollection = db.collection("favorite");
     // chef Api
 
     // PUBLIC GET — Meals with Sorting
@@ -105,6 +107,89 @@ async function run() {
         res.status(500).send({
           success: false,
           message: "Failed to fetch meal",
+          error: err.message,
+        });
+      }
+    });
+
+    // GET /reviews/:foodId
+    app.get("/reviews/:foodId", async (req, res) => {
+      try {
+        const { foodId } = req.params;
+        const reviews = await reviewsCollection
+          .find({ foodId })
+          .sort({ date: -1 })
+          .toArray();
+        res.send({ success: true, data: reviews });
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({
+          success: false,
+          message: "Failed to fetch reviews",
+          error: err.message,
+        });
+      }
+    });
+
+    // POST /reviews
+    app.post("/reviews", async (req, res) => {
+      try {
+        const review = req.body; // { foodId, reviewerName, reviewerImage, rating, comment, date }
+
+        if (
+          !review.foodId ||
+          !review.reviewerName ||
+          !review.rating ||
+          !review.comment
+        ) {
+          return res
+            .status(400)
+            .send({ success: false, message: "Missing required fields!" });
+        }
+
+        const result = await reviewsCollection.insertOne(review);
+        res.send({
+          success: true,
+          message: "Review submitted successfully!",
+          data: result,
+        });
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({
+          success: false,
+          message: "Failed to submit review",
+          error: err.message,
+        });
+      }
+    });
+
+    // POST /favorites
+    app.post("/favorites", async (req, res) => {
+      try {
+        const favorite = req.body; // { userEmail, mealId, mealName, chefId, chefName, price, addedTime }
+
+        // Check if already in favorites
+        const exists = await favoritesCollection.findOne({
+          userEmail: favorite.userEmail,
+          mealId: favorite.mealId,
+        });
+        if (exists)
+          return res.send({
+            success: false,
+            message: "Meal already in favorites!",
+          });
+
+        const result = await favoritesCollection.insertOne(favorite);
+        res.send({
+          success: true,
+          message: "Added to favorites!",
+          data: result,
+        });
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({
+          success: false,
+          message: "Failed to add favorite",
           error: err.message,
         });
       }
