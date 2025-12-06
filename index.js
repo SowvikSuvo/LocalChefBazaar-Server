@@ -53,12 +53,13 @@ const client = new MongoClient(process.env.MONGODB_URI, {
 });
 async function run() {
   try {
+    // const usersCollection = db.collection("users");
     const db = client.db("LocalChefBazaar");
     const mealsCollection = db.collection("meals");
     const reviewsCollection = db.collection("review");
     const favoritesCollection = db.collection("favorite");
+    const ordersCollection = db.collection("orders");
     // chef Api
-
     // PUBLIC GET — Meals with Sorting
     app.get("/meals", async (req, res) => {
       try {
@@ -127,6 +128,25 @@ async function run() {
           success: false,
           message: "Failed to fetch reviews",
           error: err.message,
+        });
+      }
+    });
+
+    app.post("/orders", async (req, res) => {
+      try {
+        const orderData = req.body;
+        const result = await ordersCollection.insertOne(orderData);
+
+        res.send({
+          success: true,
+          message: "Order placed successfully!",
+          orderId: result.insertedId,
+        });
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to place order",
         });
       }
     });
@@ -209,7 +229,7 @@ async function run() {
           "estimatedDeliveryTime",
           "chefExperience",
           "userEmail",
-          "chefId",
+          "chefId", // original full UID from client
           "foodImage",
           "deliveryArea",
         ];
@@ -222,6 +242,9 @@ async function run() {
             });
           }
         }
+
+        // SHORTEN chefId
+        meal.chefId = `chef_${meal.chefId.slice(0, 6)}`; // <-- short version
 
         // FIX: ingredients must be array
         if (!Array.isArray(meal.ingredients)) {
@@ -249,6 +272,32 @@ async function run() {
           message: "Failed to create meal",
           error: err.message,
         });
+      }
+    });
+
+    // GET /orders?userEmail=user@example.com
+    app.get("/orders", verifyJWT, async (req, res) => {
+      try {
+        const userEmail = req.query.userEmail;
+
+        if (req.tokenEmail !== userEmail) {
+          return res.status(403).send({ success: false, message: "Forbidden" });
+        }
+
+        const orders = await ordersCollection
+          .find({ userEmail })
+          .sort({ orderTime: -1 })
+          .toArray();
+
+        res.send({
+          success: true,
+          data: orders, // <--- frontend expects response.data.data
+        });
+      } catch (err) {
+        console.error(err);
+        res
+          .status(500)
+          .send({ success: false, message: "Failed to fetch orders" });
       }
     });
 
