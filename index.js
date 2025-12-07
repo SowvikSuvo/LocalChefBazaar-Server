@@ -50,13 +50,110 @@ const client = new MongoClient(process.env.MONGODB_URI, {
 });
 async function run() {
   try {
-    // const usersCollection = db.collection("users");
     const db = client.db("LocalChefBazaar");
+    const usersCollection = db.collection("users");
     const mealsCollection = db.collection("meals");
     const reviewsCollection = db.collection("review");
     const favoritesCollection = db.collection("favorite");
     const ordersCollection = db.collection("orders");
     const paymentCollection = db.collection("payments");
+    const adminRequestsCollection = db.collection("adminRequests");
+
+    app.post("/users", async (req, res) => {
+      const user = req.body;
+
+      try {
+        const existingUser = await usersCollection.findOne({ uid: user.uid });
+        if (existingUser) return res.send({ message: "User already exists" });
+
+        const newUser = {
+          uid: user.uid,
+          displayName: user.name || user.displayName,
+          email: user.email,
+          address: user.address || "",
+          photoURL: user.image || user.photoURL,
+          role: "user",
+          status: "active",
+        };
+
+        const result = await usersCollection.insertOne(newUser);
+        res.status(201).send(result);
+      } catch (err) {
+        console.error(err);
+        res
+          .status(500)
+          .send({ message: "Failed to create user", error: err.message });
+      }
+    });
+
+    app.get("/user/role/:email", async (req, res) => {
+      const email = req.params.email;
+      const result = await usersCollection.findOne({ email });
+      if (!result) {
+        return res.status(404).send({ message: "User not found" });
+      }
+      res.send({ role: result?.role });
+    });
+
+    app.patch("/users/role/:email", async (req, res) => {
+      try {
+        const { email } = req.params;
+        const updateData = req.body; // { role, chefId? }
+
+        const result = await usersCollection.updateOne(
+          { email },
+          { $set: updateData }
+        );
+
+        if (result.modifiedCount === 0) {
+          return res
+            .status(404)
+            .send({ message: "User not found or already updated" });
+        }
+
+        res.send({ success: true, message: "User role updated successfully!" });
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({
+          success: false,
+          message: "Failed to update user role",
+          error: err.message,
+        });
+      }
+    });
+
+    app.get("/users/:uid", async (req, res) => {
+      try {
+        const { uid } = req.params;
+        const user = await usersCollection.findOne({ uid });
+        if (!user) return res.status(404).send({ message: "User not found" });
+        res.send(user);
+      } catch (err) {
+        res
+          .status(500)
+          .send({ message: "Failed to fetch user", error: err.message });
+      }
+    });
+
+    app.post("/admin/requests", async (req, res) => {
+      try {
+        const request = req.body;
+
+        // Set default values
+        request.requestStatus = "pending";
+        request.requestTime = new Date();
+
+        const result = await adminRequestsCollection.insertOne(request);
+        res.send({ success: true, data: result });
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({
+          success: false,
+          message: "Failed to create request",
+          error: err.message,
+        });
+      }
+    });
 
     // payment endpoint
     app.post("/create-checkout-session", verifyJWT, async (req, res) => {
@@ -124,7 +221,7 @@ async function run() {
           userEmail: metadata.userEmail,
           transactionId: session.payment_intent,
           paymentStatus: "paid",
-          orderStatus: "accepted",
+          orderStatus: "pending",
           amountPaid: session.amount_total / 100,
           quantity: Number(metadata.quantity),
           mealName: metadata.mealName,
@@ -137,7 +234,7 @@ async function run() {
 
         await ordersCollection.updateOne(
           { _id: new ObjectId(metadata.orderId) },
-          { $set: { paymentStatus: "paid", orderStatus: "accepted" } }
+          { $set: { paymentStatus: "paid" } }
         );
 
         res.send({
@@ -246,6 +343,58 @@ async function run() {
       }
     });
 
+    app.patch("/admin/requests/:id", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { requestStatus } = req.body; // "approved" or "rejected"
+
+        const result = await adminRequestsCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { requestStatus } }
+        );
+
+        if (result.modifiedCount === 0) {
+          return res
+            .status(404)
+            .send({ message: "Request not found or already updated" });
+        }
+
+        res.send({
+          success: true,
+          message: `Request ${requestStatus} successfully!`,
+        });
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({
+          success: false,
+          message: "Failed to update request",
+          error: err.message,
+        });
+      }
+    });
+
+    // Get all orders for the logged-in chef
+    app.get("/orders/by-chef/:chefId", async (req, res) => {
+      const chefId = req.params.chefId;
+
+      // Show only orders where chefId matches logged-in chef
+      const orders = await ordersCollection.find({ chefId }).toArray();
+
+      res.send(orders);
+    });
+
+    app.patch("/orders/status/:id", async (req, res) => {
+      const id = req.params.id;
+      const { orderStatus } = req.body;
+
+      const result = await ordersCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: { orderStatus } }
+      );
+
+      res.send(result);
+    });
+
     // get all orders for a user by email
     // app.get("/my-orders/:email", async (req, res) => {;
 
@@ -284,7 +433,7 @@ async function run() {
     // POST /favorites
     app.post("/favorites", async (req, res) => {
       try {
-        const favorite = req.body; // { userEmail, mealId, mealName, chefId, chefName, price, addedTime }
+        const favorite = req.body;
 
         // Check if already in favorites
         const exists = await favoritesCollection.findOne({
@@ -383,7 +532,7 @@ async function run() {
 
         res.send({
           success: true,
-          data: orders, // <--- frontend expects response.data.data
+          data: orders,
         });
       } catch (err) {
         console.error(err);
