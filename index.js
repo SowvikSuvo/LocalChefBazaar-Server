@@ -362,6 +362,66 @@ async function run() {
 
     // chef Api
 
+    app.get("/my-meals/:email", async (req, res) => {
+      try {
+        const email = req.params.email;
+
+        const meals = await mealsCollection
+          .find({ userEmail: email })
+          .sort({ createdAt: -1 })
+          .toArray();
+
+        res.send({ success: true, data: meals });
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to fetch meals",
+        });
+      }
+    });
+
+    app.delete("/meals/:id", async (req, res) => {
+      try {
+        const result = await mealsCollection.deleteOne({
+          _id: new ObjectId(req.params.id),
+        });
+
+        res.send({
+          success: true,
+          message: "Meal deleted successfully",
+        });
+      } catch (err) {
+        res.status(500).send({
+          success: false,
+          message: "Failed to delete meal",
+          error: err.message,
+        });
+      }
+    });
+    
+    app.patch("/meals/:id", async (req, res) => {
+      try {
+        const updateData = req.body;
+
+        const result = await mealsCollection.updateOne(
+          { _id: new ObjectId(req.params.id) },
+          { $set: updateData }
+        );
+
+        res.send({
+          success: true,
+          message: "Meal updated successfully",
+        });
+      } catch (err) {
+        res.status(500).send({
+          success: false,
+          message: "Failed to update meal",
+          error: err.message,
+        });
+      }
+    });
+
     app.get("/meals", async (req, res) => {
       try {
         const sortOrder = req.query.sort === "desc" ? -1 : 1;
@@ -436,6 +496,23 @@ async function run() {
     app.post("/orders", async (req, res) => {
       try {
         const orderData = req.body;
+
+        // Check if the user is marked as fraud
+        const user = await usersCollection.findOne({
+          email: orderData.userEmail,
+        });
+        if (!user) {
+          return res
+            .status(404)
+            .send({ success: false, message: "User not found" });
+        }
+        if (user.status === "fraud" && user.role === "user") {
+          return res.status(403).send({
+            success: false,
+            message: "You are marked as fraud and cannot place orders",
+          });
+        }
+
         const result = await ordersCollection.insertOne(orderData);
 
         res.send({
@@ -609,6 +686,19 @@ async function run() {
       try {
         const meal = req.body;
 
+        const chef = await usersCollection.findOne({ email: meal.userEmail });
+        if (!chef) {
+          return res
+            .status(404)
+            .send({ success: false, message: "Chef not found" });
+        }
+        if (chef.status === "fraud" && chef.role === "chef") {
+          return res.status(403).send({
+            success: false,
+            message: "You are marked as fraud and cannot create meals",
+          });
+        }
+
         const requiredFields = [
           "foodName",
           "chefName",
@@ -632,14 +722,13 @@ async function run() {
           }
         }
 
-        meal.chefId = `chef_${meal.chefId.slice(0, 6)}`; //
+        meal.chefId = `chef_${meal.chefId.slice(0, 6)}`;
 
         if (!Array.isArray(meal.ingredients)) {
           meal.ingredients = meal.ingredients.split(",").map((i) => i.trim());
         }
 
         meal.rating = Math.min(Number(meal.rating), 5);
-
         meal.createdAt = new Date();
 
         const result = await mealsCollection.insertOne(meal);
