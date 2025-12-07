@@ -59,6 +59,83 @@ async function run() {
     const paymentCollection = db.collection("payments");
     const adminRequestsCollection = db.collection("adminRequests");
 
+    const verifyAdmin = async (req, res, next) => {
+      const email = req.tokenEmail;
+      const user = await usersCollection.findOne({ email });
+
+      if (!user || user.role !== "admin") {
+        return res.status(403).send({ message: "Forbidden access" });
+      }
+
+      next();
+    };
+
+    app.get("/users", verifyJWT, verifyAdmin, async (req, res) => {
+      try {
+        const users = await usersCollection
+          .find()
+          .sort({ displayName: 1 })
+          .toArray();
+        res.send(users);
+      } catch (err) {
+        console.error(err);
+        res
+          .status(500)
+          .send({ success: false, message: "Failed to fetch users" });
+      }
+    });
+
+    // Mark user as fraud
+    app.patch(
+      "/users/fraud/:email",
+      verifyJWT,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const { email } = req.params;
+
+          const user = await usersCollection.findOne({ email });
+
+          if (!user) {
+            return res
+              .status(404)
+              .send({ success: false, message: "User not found" });
+          }
+
+          if (user.role === "admin") {
+            return res.status(403).send({
+              success: false,
+              message: "Cannot mark an admin as fraud",
+            });
+          }
+
+          if (user.status === "fraud") {
+            return res.status(400).send({
+              success: false,
+              message: "User is already marked as fraud",
+            });
+          }
+
+          await usersCollection.updateOne(
+            { email },
+            { $set: { status: "fraud" } }
+          );
+
+          res.send({
+            success: true,
+            message: `${user.displayName} is now marked as fraud.`,
+          });
+        } catch (err) {
+          console.error(err);
+          res.status(500).send({
+            success: false,
+            message: "Failed to mark fraud",
+            error: err.message,
+          });
+        }
+      }
+    );
+
     app.post("/users", async (req, res) => {
       const user = req.body;
 
@@ -86,7 +163,7 @@ async function run() {
       }
     });
 
-    app.get("/user/role/:email", async (req, res) => {
+    app.get("/user/role/:email", verifyJWT, async (req, res) => {
       const email = req.params.email;
       const result = await usersCollection.findOne({ email });
       if (!result) {
@@ -137,21 +214,53 @@ async function run() {
 
     app.post("/admin/requests", async (req, res) => {
       try {
-        const request = req.body;
+        const { userName, userEmail, requestType } = req.body;
 
-        // Set default values
-        request.requestStatus = "pending";
-        request.requestTime = new Date();
+        console.log("Body:", req.body);
 
-        const result = await adminRequestsCollection.insertOne(request);
-        res.send({ success: true, data: result });
+        if (!userName || !userEmail || !requestType) {
+          return res.status(400).send({
+            success: false,
+            message: "Missing required fields",
+          });
+        }
+
+        const newRequest = {
+          userName,
+          userEmail,
+          requestType,
+          requestStatus: "pending",
+          requestTime: new Date(),
+        };
+
+        const result = await adminRequestsCollection.insertOne(newRequest);
+
+        res.send({
+          success: true,
+          message: "Request submitted!",
+          data: result,
+        });
       } catch (err) {
-        console.error(err);
+        console.error("Error in /admin/requests ->", err);
         res.status(500).send({
           success: false,
-          message: "Failed to create request",
+          message: "Server error",
           error: err.message,
         });
+      }
+    });
+
+    app.get("/admin/requests", verifyJWT, verifyAdmin, async (req, res) => {
+      try {
+        const requests = await adminRequestsCollection
+          .find()
+          .sort({ requestTime: -1 }) // latest first
+          .toArray();
+
+        res.send(requests);
+      } catch (error) {
+        console.error("Error fetching requests:", error);
+        res.status(500).send({ message: "Server error" });
       }
     });
 
@@ -346,23 +455,60 @@ async function run() {
     app.patch("/admin/requests/:id", async (req, res) => {
       try {
         const { id } = req.params;
-        const { requestStatus } = req.body; // "approved" or "rejected"
+        const { action, email, requestType } = req.body;
 
-        const result = await adminRequestsCollection.updateOne(
-          { _id: new ObjectId(id) },
-          { $set: { requestStatus } }
-        );
+        // Reject Request
+        if (action === "reject") {
+          await adminRequestsCollection.updateOne(
+            { _id: new ObjectId(id) },
+            { $set: { requestStatus: "rejected" } }
+          );
 
-        if (result.modifiedCount === 0) {
-          return res
-            .status(404)
-            .send({ message: "Request not found or already updated" });
+          return res.send({
+            success: true,
+            message: "Request rejected successfully!",
+          });
         }
 
-        res.send({
-          success: true,
-          message: `Request ${requestStatus} successfully!`,
-        });
+        // Accept Request
+        if (action === "accept") {
+          let updateRole = {};
+
+          if (requestType === "chef") {
+            const randomId = Math.floor(1000 + Math.random() * 9000);
+            updateRole = {
+              role: "chef",
+              chefId: `chef-${randomId}`,
+            };
+          } else if (requestType === "admin") {
+            updateRole = {
+              role: "admin",
+            };
+          }
+
+          const userUpdate = await usersCollection.updateOne(
+            { email: email }, // MUST match userEmail from frontend
+            { $set: updateRole }
+          );
+
+          if (!userUpdate.modifiedCount) {
+            return res.send({
+              success: false,
+              message: "User role update failed — email not found!",
+            });
+          }
+
+          // Update request status
+          await adminRequestsCollection.updateOne(
+            { _id: new ObjectId(id) },
+            { $set: { requestStatus: "approved" } }
+          );
+
+          return res.send({
+            success: true,
+            message: "Request approved successfully!",
+          });
+        }
       } catch (err) {
         console.error(err);
         res.status(500).send({
@@ -394,9 +540,6 @@ async function run() {
 
       res.send(result);
     });
-
-    // get all orders for a user by email
-    // app.get("/my-orders/:email", async (req, res) => {;
 
     // POST /reviews
     app.post("/reviews", async (req, res) => {
