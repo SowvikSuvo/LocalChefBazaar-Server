@@ -399,7 +399,7 @@ async function run() {
         });
       }
     });
-    
+
     app.patch("/meals/:id", async (req, res) => {
       try {
         const updateData = req.body;
@@ -469,25 +469,6 @@ async function run() {
         res.status(500).send({
           success: false,
           message: "Failed to fetch meal",
-          error: err.message,
-        });
-      }
-    });
-
-    // GET /reviews/:foodId
-    app.get("/reviews/:foodId", async (req, res) => {
-      try {
-        const { foodId } = req.params;
-        const reviews = await reviewsCollection
-          .find({ foodId })
-          .sort({ date: -1 })
-          .toArray();
-        res.send({ success: true, data: reviews });
-      } catch (err) {
-        console.error(err);
-        res.status(500).send({
-          success: false,
-          message: "Failed to fetch reviews",
           error: err.message,
         });
       }
@@ -621,20 +602,44 @@ async function run() {
     // POST /reviews
     app.post("/reviews", async (req, res) => {
       try {
-        const review = req.body; // { foodId, reviewerName, reviewerImage, rating, comment, date }
+        const {
+          foodId,
+          reviewerName,
+          reviewerImage,
+          mealName,
+          rating,
+          comment,
+          reviewerEmail,
+        } = req.body;
 
+        // Validate required fields
         if (
-          !review.foodId ||
-          !review.reviewerName ||
-          !review.rating ||
-          !review.comment
+          !foodId ||
+          !mealName ||
+          !reviewerName ||
+          !rating ||
+          !comment ||
+          !reviewerEmail
         ) {
-          return res
-            .status(400)
-            .send({ success: false, message: "Missing required fields!" });
+          return res.status(400).send({
+            success: false,
+            message: "Missing required fields!",
+          });
         }
 
+        const review = {
+          foodId,
+          reviewerName,
+          mealName,
+          reviewerImage,
+          reviewerEmail,
+          rating: Number(rating),
+          comment,
+          date: new Date(),
+        };
+
         const result = await reviewsCollection.insertOne(review);
+
         res.send({
           success: true,
           message: "Review submitted successfully!",
@@ -645,6 +650,85 @@ async function run() {
         res.status(500).send({
           success: false,
           message: "Failed to submit review",
+          error: err.message,
+        });
+      }
+    });
+
+    // GET /reviews/:foodId
+    app.get("/reviews/:foodId", async (req, res) => {
+      try {
+        const { foodId } = req.params;
+        const reviews = await reviewsCollection
+          .find({ foodId })
+          .sort({ date: -1 })
+          .toArray();
+        res.send({ success: true, data: reviews });
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({
+          success: false,
+          message: "Failed to fetch reviews",
+          error: err.message,
+        });
+      }
+    });
+
+    app.get("/my-reviews/:email", verifyJWT, async (req, res) => {
+      try {
+        const { email } = req.params;
+
+        if (req.tokenEmail !== email) {
+          return res.status(403).send({ success: false, message: "Forbidden" });
+        }
+
+        const reviews = await reviewsCollection
+          .find({ reviewerEmail: email }) // ✅ filter by user email
+          .sort({ date: -1 })
+          .toArray();
+
+        res.send({ success: true, data: reviews });
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({
+          success: false,
+          message: "Failed to fetch reviews",
+          error: err.message,
+        });
+      }
+    });
+
+    // Update a review
+    app.put("/reviews/:id",  async (req, res) => {
+      try {
+        const { id } = req.params;
+        const updateData = req.body; // { rating, comment }
+
+        const review = await reviewsCollection.findOne({
+          _id: new ObjectId(id),
+        });
+        if (!review)
+          return res
+            .status(404)
+            .send({ success: false, message: "Review not found" });
+
+        if (review.userEmail !== req.tokenEmail) {
+          return res
+            .status(403)
+            .send({ success: false, message: "Unauthorized" });
+        }
+
+        await reviewsCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: updateData }
+        );
+
+        res.send({ success: true, message: "Review updated successfully!" });
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({
+          success: false,
+          message: "Failed to update review",
           error: err.message,
         });
       }
@@ -677,6 +761,38 @@ async function run() {
         res.status(500).send({
           success: false,
           message: "Failed to add favorite",
+          error: err.message,
+        });
+      }
+    });
+
+    // Delete a review
+    app.delete("/reviews/:id", async (req, res) => {
+      try {
+        const { id } = req.params;
+
+        const review = await reviewsCollection.findOne({
+          _id: new ObjectId(id),
+        });
+        if (!review)
+          return res
+            .status(404)
+            .send({ success: false, message: "Review not found" });
+
+        if (review.userEmail !== req.tokenEmail) {
+          return res
+            .status(403)
+            .send({ success: false, message: "Unauthorized" });
+        }
+
+        await reviewsCollection.deleteOne({ _id: new ObjectId(id) });
+
+        res.send({ success: true, message: "Review deleted successfully!" });
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({
+          success: false,
+          message: "Failed to delete review",
           error: err.message,
         });
       }
