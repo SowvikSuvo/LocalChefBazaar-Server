@@ -496,11 +496,12 @@ async function run() {
     app.get("/meals", async (req, res) => {
       try {
         const sortOrder = req.query.sort === "desc" ? -1 : 1;
-        // default = asc
+        const limit = parseInt(req.query.limit) || 0;
 
         const meals = await mealsCollection
           .find()
           .sort({ price: sortOrder })
+          .limit(limit)
           .toArray();
 
         res.send({
@@ -514,6 +515,15 @@ async function run() {
           message: "Failed to fetch meals",
           error: err.message,
         });
+      }
+    });
+    app.get("/meals", async (req, res) => {
+      const limit = parseInt(req.query.limit) || 0;
+      try {
+        const meals = await mealsCollection.find().limit(limit).toArray();
+        res.send({ success: true, data: meals });
+      } catch (err) {
+        res.status(500).send({ success: false, message: err.message });
       }
     });
     // Get single meal by ID
@@ -657,10 +667,6 @@ async function run() {
       }
     });
 
-    // Get all orders for the logged-in chef
-    // GET /orders/by-chef
-    // GET all orders for a specific chef
-    // GET /orders/by-chef
     app.get("/orders/by-chef", verifyJWT, async (req, res) => {
       try {
         // Get user from token
@@ -828,6 +834,18 @@ async function run() {
           message: "Failed to submit review",
           error: err.message,
         });
+      }
+    });
+
+    app.get("/reviews", async (req, res) => {
+      try {
+        const reviews = await reviewsCollection
+          .find()
+          .sort({ date: -1 })
+          .toArray();
+        res.send({ success: true, data: reviews });
+      } catch (err) {
+        res.status(500).send({ success: false, message: err.message });
       }
     });
 
