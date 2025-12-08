@@ -612,6 +612,35 @@ async function run() {
       }
     });
 
+    app.get("/admin/stats", async (req, res) => {
+      try {
+        const totalOrders = await ordersCollection.countDocuments();
+        const ordersPending = await ordersCollection.countDocuments({
+          orderStatus: "pending",
+        });
+        const ordersDelivered = await ordersCollection.countDocuments({
+          orderStatus: "delivered",
+        });
+        const totalPayments = await ordersCollection
+          .aggregate([{ $group: { _id: null, total: { $sum: "$price" } } }])
+          .toArray();
+        const totalUsers = await usersCollection.countDocuments();
+
+        res.send({
+          success: true,
+          data: {
+            totalOrders,
+            ordersPending,
+            ordersDelivered,
+            totalPayments: totalPayments[0]?.total || 0,
+            totalUsers,
+          },
+        });
+      } catch (err) {
+        res.status(500).send({ success: false, message: err.message });
+      }
+    });
+
     // Get all orders for the logged-in chef
     // GET /orders/by-chef
     // GET all orders for a specific chef
