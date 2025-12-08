@@ -365,7 +365,7 @@ async function run() {
       try {
         const meal = req.body;
 
-        // Verify chef identity from JWT instead of trusting userEmail
+        // Verify chef identity from JWT
         const chef = await usersCollection.findOne({ email: req.tokenEmail });
         if (!chef || chef.role !== "chef") {
           return res
@@ -376,7 +376,7 @@ async function run() {
         if (chef.status === "fraud") {
           return res.status(403).send({
             success: false,
-            message: "You are marked as fraud and cannot create meals",
+            message: "You are marked as a fraud and cannot create meals",
           });
         }
 
@@ -402,8 +402,8 @@ async function run() {
           }
         }
 
-        // Use chef's UID from JWT for security
-        meal.chefId = `chef_${chef._id.toString().slice(0, 6)}`;
+        // Use existing chefId from user document
+        meal.chefId = chef.chefId;
         meal.userEmail = chef.email;
 
         // Ensure ingredients is an array
@@ -565,13 +565,22 @@ async function run() {
 
         // Accept Request
         if (action === "accept") {
+          const user = await usersCollection.findOne({ email });
+          if (!user) {
+            return res.status(404).send({
+              success: false,
+              message: "User not found",
+            });
+          }
+
           let updateRole = {};
 
           if (requestType === "chef") {
+            // Generate a 4-digit random number for chefId
             const randomId = Math.floor(1000 + Math.random() * 9000);
             updateRole = {
               role: "chef",
-              chefId: `chef-${randomId}`,
+              chefId: `chef_${randomId}`, // matches your order collection format
             };
           } else if (requestType === "admin") {
             updateRole = {
@@ -580,14 +589,15 @@ async function run() {
           }
 
           const userUpdate = await usersCollection.updateOne(
-            { email: email }, // MUST match userEmail from frontend
+            { email },
             { $set: updateRole }
           );
 
           if (!userUpdate.modifiedCount) {
             return res.send({
               success: false,
-              message: "User role update failed — email not found!",
+              message:
+                "User role update failed — email not found or already updated!",
             });
           }
 
@@ -602,6 +612,12 @@ async function run() {
             message: "Request approved successfully!",
           });
         }
+
+        // Invalid action
+        return res.status(400).send({
+          success: false,
+          message: "Invalid action. Must be 'accept' or 'reject'.",
+        });
       } catch (err) {
         console.error(err);
         res.status(500).send({
@@ -644,18 +660,21 @@ async function run() {
     // Get all orders for the logged-in chef
     // GET /orders/by-chef
     // GET all orders for a specific chef
+    // GET /orders/by-chef
     app.get("/orders/by-chef", verifyJWT, async (req, res) => {
       try {
-        // লগইন করা শেফের email থেকে শেফ চিহ্নিত করা
+        // Get user from token
         const requester = await usersCollection.findOne({
           email: req.tokenEmail,
         });
         if (!requester)
           return res.status(403).send({ success: false, message: "Forbidden" });
 
-        // শেফের chefId দিয়ে অর্ডার ফেচ করা
+        // Ensure the user is a chef
+        if (!requester.chefId) return res.send({ success: true, data: [] });
+
         const orders = await ordersCollection
-          .find({ chefId: requester.chefId })
+          .find({ chefId: requester.chefId }) // use chefId stored in DB
           .sort({ orderTime: -1 })
           .toArray();
 
@@ -668,32 +687,30 @@ async function run() {
       }
     });
 
+    // PATCH /orders/status/:id
     app.patch("/orders/status/:id", verifyJWT, async (req, res) => {
       try {
+        const { id } = req.params;
         const { orderStatus } = req.body;
-        if (!orderStatus)
-          return res
-            .status(400)
-            .send({ success: false, message: "Order status required" });
+
         const result = await ordersCollection.updateOne(
-          { _id: new ObjectId(req.params.id) },
+          { _id: new ObjectId(id) },
           { $set: { orderStatus } }
         );
-        if (!result.modifiedCount)
+
+        if (!result.modifiedCount) {
           return res.status(404).send({
             success: false,
-            message: "Order not found or already updated",
+            message: "Order not found or status unchanged",
           });
-        res.send({
-          success: true,
-          message: "Order status updated successfully!",
-        });
+        }
+
+        res.send({ success: true, message: "Order status updated" });
       } catch (err) {
-        res.status(500).send({
-          success: false,
-          message: "Failed to update order status",
-          error: err.message,
-        });
+        console.error("Update Order Status Error:", err);
+        res
+          .status(500)
+          .send({ success: false, message: "Failed to update order status" });
       }
     });
 
