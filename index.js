@@ -254,7 +254,7 @@ async function run() {
       try {
         const requests = await adminRequestsCollection
           .find()
-          .sort({ requestTime: -1 }) 
+          .sort({ requestTime: -1 })
           .toArray();
 
         res.send(requests);
@@ -613,19 +613,29 @@ async function run() {
     });
 
     // Get all orders for the logged-in chef
-    app.get("/orders/by-chef/:chefId", async (req, res) => {
+    // GET /orders/by-chef
+    // GET all orders for a specific chef
+    app.get("/orders/by-chef", verifyJWT, async (req, res) => {
       try {
+        // লগইন করা শেফের email থেকে শেফ চিহ্নিত করা
+        const requester = await usersCollection.findOne({
+          email: req.tokenEmail,
+        });
+        if (!requester)
+          return res.status(403).send({ success: false, message: "Forbidden" });
+
+        // শেফের chefId দিয়ে অর্ডার ফেচ করা
         const orders = await ordersCollection
-          .find({ chefId: req.params.chefId })
+          .find({ chefId: requester.chefId })
           .sort({ orderTime: -1 })
           .toArray();
+
         res.send({ success: true, data: orders });
       } catch (err) {
-        res.status(500).send({
-          success: false,
-          message: "Failed to fetch chef orders",
-          error: err.message,
-        });
+        console.error("Error fetching chef orders:", err);
+        res
+          .status(500)
+          .send({ success: false, message: "Failed to fetch orders" });
       }
     });
 
