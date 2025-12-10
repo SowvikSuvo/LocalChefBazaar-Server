@@ -533,21 +533,31 @@ async function run() {
 
     app.get("/meals", verifyJWT, async (req, res) => {
       try {
+        const sortBy = req.query.sortBy; // undefined by default
         const sortOrder = req.query.sort === "desc" ? -1 : 1;
-        const limit = parseInt(req.query.limit) || 0;
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 10;
+        const skip = (page - 1) * limit;
+
+        const totalMeals = await mealsCollection.countDocuments();
+
+        // Always show latest by default
+        const sortObj =
+          sortBy === "price" ? { price: sortOrder } : { createdAt: -1 };
 
         const meals = await mealsCollection
           .find()
-          .sort({ price: sortOrder })
+          .sort(sortObj)
+          .skip(skip)
           .limit(limit)
           .toArray();
 
         res.send({
           success: true,
+          total: totalMeals,
           data: meals,
         });
       } catch (err) {
-        console.error("Get Meals Error:", err);
         res.status(500).send({
           success: false,
           message: "Failed to fetch meals",
@@ -555,16 +565,6 @@ async function run() {
         });
       }
     });
-
-    // app.get("/meals", async (req, res) => {
-    //   const limit = parseInt(req.query.limit) || 0;
-    //   try {
-    //     const meals = await mealsCollection.find().limit(limit).toArray();
-    //     res.send({ success: true, data: meals });
-    //   } catch (err) {
-    //     res.status(500).send({ success: false, message: err.message });
-    //   }
-    // });
 
     // Get single meal by ID
     app.get("/meals/:id", async (req, res) => {
