@@ -566,6 +566,41 @@ async function run() {
       }
     });
 
+    app.get("/search-meals", verifyJWT, async (req, res) => {
+      try {
+        const queryText = req.query.query || "";
+
+        // If query empty → return empty array
+        if (!queryText.trim()) {
+          return res.send({
+            success: true,
+            data: [],
+          });
+        }
+
+        // Search by foodName
+        const meals = await mealsCollection
+          .find({
+            foodName: { $regex: queryText, $options: "i" },
+          })
+          .sort({ createdAt: -1 }) // latest first
+          .limit(20) // prevent heavy load
+          .toArray();
+
+        res.send({
+          success: true,
+          total: meals.length,
+          data: meals,
+        });
+      } catch (err) {
+        res.status(500).send({
+          success: false,
+          message: "Search failed",
+          error: err.message,
+        });
+      }
+    });
+
     // Get single meal by ID
     app.get("/meals/:id", async (req, res) => {
       try {
