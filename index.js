@@ -14,7 +14,7 @@ admin.initializeApp({
 });
 
 const app = express();
-// middleware
+
 app.use(
   cors({
     origin: [process.env.CLIENT_URL],
@@ -24,7 +24,7 @@ app.use(
 );
 app.use(express.json());
 
-// jwt middlewares
+// JWT Verification Middleware
 const verifyJWT = async (req, res, next) => {
   const token = req?.headers?.authorization?.split(" ")[1];
   console.log(token);
@@ -59,6 +59,7 @@ async function run() {
     const paymentCollection = db.collection("payments");
     const adminRequestsCollection = db.collection("adminRequests");
 
+    // Admin Verification Middleware
     const verifyAdmin = async (req, res, next) => {
       const email = req.tokenEmail;
       const user = await usersCollection.findOne({ email });
@@ -70,6 +71,7 @@ async function run() {
       next();
     };
 
+    // Chef Verification Middleware
     const verifyChef = async (req, res, next) => {
       try {
         const email = req.tokenEmail;
@@ -115,7 +117,6 @@ async function run() {
       }
     });
 
-    // Mark user as fraud
     app.patch(
       "/users/fraud/:email",
       verifyJWT,
@@ -209,7 +210,7 @@ async function run() {
       async (req, res) => {
         try {
           const { email } = req.params;
-          const updateData = req.body; // { role, chefId? }
+          const updateData = req.body;
 
           const result = await usersCollection.updateOne(
             { email },
@@ -302,7 +303,6 @@ async function run() {
       }
     });
 
-    // payment endpoint
     app.post("/create-checkout-session", verifyJWT, async (req, res) => {
       try {
         const paymentInfo = req.body;
@@ -398,12 +398,10 @@ async function run() {
       }
     });
 
-    // chef Api
     app.post("/create-meals", verifyJWT, verifyChef, async (req, res) => {
       try {
         const meal = req.body;
 
-        // Verify chef identity from JWT
         const chef = await usersCollection.findOne({ email: req.tokenEmail });
         if (!chef || chef.role !== "chef") {
           return res
@@ -418,7 +416,6 @@ async function run() {
           });
         }
 
-        // Required fields
         const requiredFields = [
           "foodName",
           "chefName",
@@ -440,16 +437,13 @@ async function run() {
           }
         }
 
-        // Use existing chefId from user document
         meal.chefId = chef.chefId;
         meal.userEmail = chef.email;
 
-        // Ensure ingredients is an array
         if (!Array.isArray(meal.ingredients)) {
           meal.ingredients = meal.ingredients.split(",").map((i) => i.trim());
         }
 
-        // Rating clamp 0-5
         meal.rating = Math.max(0, Math.min(Number(meal.rating), 5));
 
         meal.createdAt = new Date();
@@ -471,7 +465,7 @@ async function run() {
       }
     });
 
-    app.get("/my-meals/:email", async (req, res) => {
+    app.get("/my-meals/:email", verifyJWT, async (req, res) => {
       try {
         const email = req.params.email;
 
@@ -531,9 +525,9 @@ async function run() {
       }
     });
 
-    app.get("/meals", verifyJWT, async (req, res) => {
+    app.get("/meals", async (req, res) => {
       try {
-        const sortBy = req.query.sortBy; // undefined by default
+        const sortBy = req.query.sortBy;
         const sortOrder = req.query.sort === "desc" ? -1 : 1;
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 10;
@@ -541,7 +535,6 @@ async function run() {
 
         const totalMeals = await mealsCollection.countDocuments();
 
-        // Always show latest by default
         const sortObj =
           sortBy === "price" ? { price: sortOrder } : { createdAt: -1 };
 
@@ -570,7 +563,6 @@ async function run() {
       try {
         const queryText = req.query.query || "";
 
-        // If query empty → return empty array
         if (!queryText.trim()) {
           return res.send({
             success: true,
@@ -578,13 +570,12 @@ async function run() {
           });
         }
 
-        // Search by foodName
         const meals = await mealsCollection
           .find({
             foodName: { $regex: queryText, $options: "i" },
           })
-          .sort({ createdAt: -1 }) // latest first
-          .limit(20) // prevent heavy load
+          .sort({ createdAt: -1 })
+          .limit(20)
           .toArray();
 
         res.send({
@@ -601,12 +592,10 @@ async function run() {
       }
     });
 
-    // Get single meal by ID
-    app.get("/meals/:id", async (req, res) => {
+    app.get("/meals/:id", verifyJWT, async (req, res) => {
       try {
         const { id } = req.params;
 
-        // Find the meal by its ObjectId
         const meal = await mealsCollection.findOne({ _id: new ObjectId(id) });
 
         if (!meal) {
@@ -639,7 +628,6 @@ async function run() {
           const { id } = req.params;
           const { action, email, requestType } = req.body;
 
-          // Reject Request
           if (action === "reject") {
             await adminRequestsCollection.updateOne(
               { _id: new ObjectId(id) },
@@ -652,7 +640,6 @@ async function run() {
             });
           }
 
-          // Accept Request
           if (action === "accept") {
             const user = await usersCollection.findOne({ email });
             if (!user) {
@@ -665,11 +652,10 @@ async function run() {
             let updateRole = {};
 
             if (requestType === "chef") {
-              // Generate a 4-digit random number for chefId
               const randomId = Math.floor(1000 + Math.random() * 9000);
               updateRole = {
                 role: "chef",
-                chefId: `chef_${randomId}`, // matches your order collection format
+                chefId: `chef_${randomId}`,
               };
             } else if (requestType === "admin") {
               updateRole = {
@@ -690,7 +676,6 @@ async function run() {
               });
             }
 
-            // Update request status
             await adminRequestsCollection.updateOne(
               { _id: new ObjectId(id) },
               { $set: { requestStatus: "approved" } }
@@ -702,7 +687,6 @@ async function run() {
             });
           }
 
-          // Invalid action
           return res.status(400).send({
             success: false,
             message: "Invalid action. Must be 'accept' or 'reject'.",
@@ -749,18 +733,16 @@ async function run() {
 
     app.get("/orders/by-chef", verifyJWT, async (req, res) => {
       try {
-        // Get user from token
         const requester = await usersCollection.findOne({
           email: req.tokenEmail,
         });
         if (!requester)
           return res.status(403).send({ success: false, message: "Forbidden" });
 
-        // Ensure the user is a chef
         if (!requester.chefId) return res.send({ success: true, data: [] });
 
         const orders = await ordersCollection
-          .find({ chefId: requester.chefId }) // use chefId stored in DB
+          .find({ chefId: requester.chefId })
           .sort({ orderTime: -1 })
           .toArray();
 
@@ -773,7 +755,6 @@ async function run() {
       }
     });
 
-    // PATCH /orders/status/:id
     app.patch("/orders/status/:id", verifyJWT, async (req, res) => {
       try {
         const { id } = req.params;
@@ -800,7 +781,6 @@ async function run() {
       }
     });
 
-    // GET /orders?userEmail=user@example.com
     app.get("/orders", verifyJWT, async (req, res) => {
       try {
         const userEmail = req.query.userEmail;
@@ -829,7 +809,6 @@ async function run() {
       try {
         const orderData = req.body;
 
-        // Check if the user is marked as fraud
         const user = await usersCollection.findOne({
           email: orderData.userEmail,
         });
@@ -861,7 +840,6 @@ async function run() {
       }
     });
 
-    // POST /reviews
     app.post("/reviews", async (req, res) => {
       try {
         const {
@@ -874,7 +852,6 @@ async function run() {
           reviewerEmail,
         } = req.body;
 
-        // Validate required fields
         if (
           !foodId ||
           !mealName ||
@@ -917,7 +894,7 @@ async function run() {
       }
     });
 
-    app.get("/reviews", async (req, res) => {
+    app.get("/reviews", verifyJWT, async (req, res) => {
       try {
         const reviews = await reviewsCollection
           .find()
@@ -929,8 +906,7 @@ async function run() {
       }
     });
 
-    // GET /reviews/:foodId
-    app.get("/reviews/:foodId", async (req, res) => {
+    app.get("/reviews/:foodId", verifyJWT, async (req, res) => {
       try {
         const { foodId } = req.params;
         const reviews = await reviewsCollection
@@ -957,7 +933,7 @@ async function run() {
         }
 
         const reviews = await reviewsCollection
-          .find({ reviewerEmail: email }) // ✅ filter by user email
+          .find({ reviewerEmail: email })
           .sort({ date: -1 })
           .toArray();
 
@@ -972,11 +948,10 @@ async function run() {
       }
     });
 
-    // Update a review
     app.put("/reviews/:id", async (req, res) => {
       try {
         const { id } = req.params;
-        const updateData = req.body; // { rating, comment }
+        const updateData = req.body;
 
         const review = await reviewsCollection.findOne({
           _id: new ObjectId(id),
@@ -1007,7 +982,7 @@ async function run() {
         });
       }
     });
-    // Delete a review
+
     app.delete("/reviews/:id", async (req, res) => {
       try {
         const { id } = req.params;
@@ -1039,12 +1014,10 @@ async function run() {
       }
     });
 
-    // POST /favorites
     app.post("/favorites", async (req, res) => {
       try {
         const favorite = req.body;
 
-        // Check if already in favorites
         const exists = await favoritesCollection.findOne({
           userEmail: favorite.userEmail,
           mealId: favorite.mealId,
@@ -1105,13 +1078,11 @@ async function run() {
       }
     });
 
-    // Send a ping to confirm a successful connection
-    await client.db("admin").command({ ping: 1 });
-    console.log(
-      "Pinged your deployment. You successfully connected to MongoDB!"
-    );
+    // await client.db("admin").command({ ping: 1 });
+    // console.log(
+    //   "Pinged your deployment. You successfully connected to MongoDB!"
+    // );
   } finally {
-    // Ensures that the client will close when you finish/error
   }
 }
 run().catch(console.dir);
